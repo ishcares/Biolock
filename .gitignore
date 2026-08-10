@@ -30,3 +30,7 @@ build/
 ### Operating System ###
 .DS_Store
 Thumbs.db
+
+# Ignore local source code for README-only GitHub phase
+pom.xml
+src/
