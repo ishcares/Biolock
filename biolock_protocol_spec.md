@@ -1,89 +1,78 @@
 # 🔐 BioLock: Cryptographic Protocol & Implementation Specification
 
-This document defines the strict cryptographic, mobile-to-card APDU, and backend verification protocol for the BioLock system. All implementations (Android SDK and Spring Boot backend) must comply with these specifications.
+This document defines the cryptographic parameters, verification mechanics, and backend transaction flow for the BioLock Hybrid authentication system (Tier 1: Device Passkeys, Tier 2: Physical Smart Cards).
 
 ---
 
 ## 1. The Core Verification Protocol
 
-The transaction signing process must prevent the Android client from altering the transaction details or fabricating the challenge. The backend serves as the single source of truth for the transaction parameters.
+The transaction signing process must prevent the client application from altering transaction parameters or fabricating the challenge. The backend remains the single source of truth.
 
+### Hybrid Verification Flow (Tier 1 & Tier 2)
 ```
-[Android App]               [Spring Boot Backend]               [Biometric Card]
-      │                               │                                 │
-      │ 1. Initiate Auth Request      │                                 │
-      ├──────────────────────────────►│                                 │
-      │                               │ 2. Generate Nonce & Challenge   │
-      │                               │    Store transaction in DB      │
-      │ 3. Challenge + Payload Hash   │                                 │
-      ◄───────────────────────────────┤                                 │
-      │                                                                 │
-      │ 4. Start NFC Session & Send APDU (Challenge)                    │
-      ├────────────────────────────────────────────────────────────────►│
-      │                                                                 │ 5. Verify Fingerprint
-      │                                                                 │    Sign Hash Offline
-      │ 6. Opaque Encrypted Envelope (AEAD)                             │    Generate Signature
-      ◄─────────────────────────────────────────────────────────────────┤
-      │                               │
-      │ 7. Submit Envelope for Settlement
-      ├──────────────────────────────►│
-      │                               │ 8. Decrypt Envelope
-      │                               │    Verify ECDSA Signature
-      │                               │    Atomically Consume Challenge
-      │                               │    Execute Duress Logic
-      │ 9. Standard HTTP Response     │
-      ◄───────────────────────────────┤
+[Mobile Client]             [Spring Boot Backend]          [Security Anchor]
+     │                                │                           │
+     │ 1. Initiate Auth Request       │                           │
+     ├───────────────────────────────►│                           │
+     │                                │ 2. Generate Nonce & Challenge
+     │                                │    Store in DB (PENDING)  │
+     │ 3. Return Challenge + Payload  │                           │
+     ◄────────────────────────────────┤                           │
+     │                                                            │
+     │ 4. Request Biometric Signature (WebAuthn or NFC APDU)      │
+     ├───────────────────────────────────────────────────────────►│
+     │                                                            │ 5. Perform Biometric Verification
+     │                                                            │    Sign Challenge via ECDSA (P-256)
+     │ 6. Cryptographic Signature Payload                         │    Return Signature to Client
+     ◄────────────────────────────────────────────────────────────┤
+     │                                │
+     │ 7. Submit Signature payload for Verification
+     ├───────────────────────────────►│
+     │                                │ 8. Verify ECDSA signature (JCA)
+     │                                │    Atomically consume challenge
+     │                                │    Evaluate Duress Flag
+     │                                │    IF DURESS: Route to 24hr Escrow
+     │                                │    ELSE: Settle immediately
+     │ 9. Return Unified HTTP SUCCESS │
+     ◄────────────────────────────────┤
 ```
 
 ---
 
 ## 2. Canonical Transaction Binding
 
-To prevent signature verification failures caused by JSON whitespace, key ordering, or formatting variations, all signed payloads must use a strictly defined, length-prefixed binary structure or canonical CBOR.
+To prevent signature verification failures caused by JSON variations, keys must be serialized into a strictly defined, length-prefixed binary structure or canonical CBOR representation before hashing.
 
-### BioLock Message Structure (V1)
+### BioLock Message Structure (V2)
 ```text
-BioLockMessageV1 =
+BioLockMessageV2 =
     protocolVersion (1 byte)
+    authType (1 byte: 0x01 = Passkey, 0x02 = Smart Card)
     domain (UTF-8, length-prefixed)
-    issuerId (UTF-8, length-prefixed)
     accountIdHash (32 bytes)
-    cardKeyId (UTF-8, length-prefixed)
     transactionId (UTF-8, length-prefixed)
     amountMinorUnits (8 bytes, unsigned integer representing paise/cents)
     currency (3 bytes, ISO 4217 uppercase, e.g., INR)
     beneficiaryHash (32 bytes)
-    deviceKeyId (UTF-8, length-prefixed)
     nonce (32 bytes, 256-bit cryptographically secure random value)
     issuedAt (8 bytes, epoch timestamp)
     expiresAt (8 bytes, epoch timestamp)
-    policyVersion (4 bytes)
-    duressPolicyVersion (4 bytes)
+    duressFlag (1 byte: 0x00 = Standard, 0x01 = Duress Active)
 ```
-
-### Replay & Substitution Prevention
-1.  **Atomic Challenge Table**: The backend must track challenges via a database table enforcing a strict state machine: `CREATED ──► CONSUMED` or `CREATED ──► EXPIRED`.
-2.  **Double Hash Prevention**: The backend and card must align on hashing. The card signs `SHA-256(CanonicalEncode(BioLockMessageV1))`. Do not double-hash the digest.
-3.  **Strict Verification Bindings**: The backend must compare the signed parameters against the pre-stored transaction record. Never trust transaction variables returned exclusively by the mobile client.
 
 ---
 
-## 3. Android APDU State Machine & Polling
+## 3. Tier-Specific Authentication Mechanics
 
-To prevent Android `IsoDep` connection timeouts while the user is placing their finger on the sensor, **do not block a single APDU request**. Instead, implement a non-blocking status polling loop.
+### Tier 1: Software Passkeys (WebAuthn / FIDO2)
+*   **Signature Generation**: The Android client invokes the system Credential Manager API, prompting the OS biometric interface. The phone's internal **TPM / Secure Enclave** signs the challenge payload.
+*   **Signature Format**: Standard WebAuthn assertion payload containing the clientDataJSON and authenticatorData, verified on the Spring Boot side using the registered public key.
 
-### APDU Command Flow
-1.  **SELECT AID** (Select Card Applet) ──► Returns Success immediately.
-2.  **INIT_AUTH(challenge)** ──► Card stores the challenge and begins biometric sensor verification. Returns a fast status word (`0x9100`).
-3.  **GET_STATUS** (Polled by Android app every 200–500ms) ──► Returns:
-    *   `0x9100`: Fingerprint matching still pending.
-    *   `0x9000`: Success (ready to signature fetch).
-    *   `0x6985`: Verification failed or user cancelled.
-4.  **GET_SIGNATURE** ──► Fetches the generated opaque envelope after `0x9000` status.
-
-### Android Guidelines
-*   Always execute NFC transactions on a background worker thread (Coroutines/Dispatchers.IO).
-*   Do not blindly retransmit the `SIGN` command after a network/NFC exception. If the card matched the finger and generated the signature, repeating the command could create a duplicate transaction conflict. Recover using `GET_STATUS` or `GET_RESULT` with the same `challengeId`.
+### Tier 2: Physical Smart Cards (NFC APDU Polling)
+*   **Polling Loop**: To prevent connection timeouts while the user places their finger on the card's sensor, the app pings the card using a non-blocking status loop:
+    *   `INIT_AUTH(challenge)` ──► Starts card-side sensor scanning. Returns `0x9100` (Pending).
+    *   `GET_STATUS` (Polled every 300ms) ──► Returns `0x9100` (Pending), `0x9000` (Success), or `0x6985` (Failed).
+    *   `GET_SIGNATURE` ──► Fetches the generated signature payload once `0x9000` is returned.
 
 ---
 
@@ -92,27 +81,18 @@ To prevent Android `IsoDep` connection timeouts while the user is placing their 
 ### Signature Format (ECDSA)
 *   **Curve**: `secp256r1` (NIST P-256).
 *   **Hash**: `SHA-256`.
-*   **Malleability Mitigation**: Enforce low-$s$ signatures ($s \le n/2$, where $n$ is the order of the curve).
-*   **Format Normalization**: Java JCA `Signature.verify()` expects **ASN.1 DER-encoded** signatures (`SEQUENCE { r, s }`). If the card secure element outputs raw P1363 format (`r || s`, 64 bytes), the Spring Boot service must parse and translate it to DER format before invoking the verifier.
-*   **Psychic Signature Check**: Always verify that signature components `r` and `s` are not zero (`r >= 1` and `s >= 1`).
+*   **Malleability Mitigation**: Enforce low-$s$ signatures ($s \le n/2$, where $n$ is the order of the curve) to prevent transaction-malleability attacks.
+*   **Format Normalization**: Java JCA `Signature.verify()` expects **ASN.1 DER-encoded** signatures (`SEQUENCE { r, s }`). If the card outputs raw P1363 format (`r || s`, 64 bytes), the Spring Boot service must parse and translate it to DER format before invoking the verifier.
+*   **Null Checks**: Always verify that signature components `r` and `s` are greater than zero to prevent signature-bypass vulnerabilities.
 
 ---
 
-## 5. Covert Duress Envelope
+## 5. Delayed Escrow Duress Protocol
 
-To prevent a compromised Android app (or overlay malware) from detecting the duress state and alerting the attacker, the card must encapsulate the duress state inside an encrypted envelope.
+To ensure victim safety during active duress (threat of violence or digital scam coercion), the system must never output error codes or alert the attacker.
 
-### Envelope Construction
-1.  **Generate Plaintext Message**:  
-    `M = CanonicalEncode(..., duressState, cardCounter)`
-2.  **Generate Signature**:  
-    `sig = ECDSA_sign(cardPrivateKey, SHA-256(M))`
-3.  **Derive Session Key**: The card and backend derive a temporary symmetric key via Elliptic Curve Diffie-Hellman (ECDH).
-4.  **Encrypt Envelope (AEAD)**: The card encrypts the payload using AES-GCM:  
-    `C = AES_GCM_Encrypt(sessionKey, nonce, Plaintext(M || sig), AssociatedData = challengeId)`
-5.  **Output**: The card returns the opaque ciphertext `C` to the Android client. The app cannot inspect `C` to check if `duressState == true`.
-
-### Silent Backend Actions
-*   The backend decrypts `C` and verifies the signature.
-*   If `duressState` is active, the backend returns a generic success/processing code to the app to maintain the user's safety.
-*   The backend silently freezes the transaction, triggers an alert to designated emergency contacts, and logs the security event in the database for forensic recovery.
+### Operations:
+1.  **Card/Passkey Signature Generation**: When a registered duress finger is scanned, the signature is generated with the `duressFlag` bit set to `0x01`.
+2.  **Generic Success Response**: The backend verifies the signature. If the duress bit is active, the API immediately returns `200 OK` with a success payload to the client app (preventing the attacker from detecting the alarm).
+3.  **24-Hour Settlement Escrow**: The transaction is marked as `ESCROW_HOLD` in the PostgreSQL database. The funds are held in an escrow buffer for exactly 24 hours.
+4.  **Silent Alarm**: designated emergency contacts are alerted, and a security log is created. The user has 24 hours to cancel the transaction before any assets leave their account.
