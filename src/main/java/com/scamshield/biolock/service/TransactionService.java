@@ -1,17 +1,15 @@
 package com.scamshield.biolock.service;
 
 import com.scamshield.biolock.model.Transaction;
+import com.scamshield.biolock.security.ECDSAValidator;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.nio.charset.StandardCharsets;
-import java.security.KeyFactory;
-import java.security.PublicKey;
-import java.security.Signature;
-import java.security.spec.X509EncodedKeySpec;
 
 @Service // Tells Spring Boot to manage this class as a Service bean
 public class TransactionService {
@@ -22,8 +20,12 @@ public class TransactionService {
     // Cryptographically secure random generator for challenge nonces
     private final SecureRandom secureRandom = new SecureRandom();
 
+    // Injected BioLock Core Cryptographic Engine
+    @Autowired
+    private ECDSAValidator ecdsaValidator;
+
     /**
-     * Creates a new pending transaction and generates a secure challenge.
+     * Creates a new pending transaction and generates a secure 256-bit challenge.
      */
     public Transaction createTransaction(double amount, String recipientUpi) {
         // 1. Strict Validation
@@ -41,7 +43,7 @@ public class TransactionService {
         tx.setRecipientUpi(recipientUpi);
         tx.setStatus("PENDING");
 
-        // 3. Generate 256-bit Cryptographic Challenge
+        // 3. Generate 256-bit Cryptographic Challenge Nonce
         byte[] challengeBytes = new byte[32]; // 32 bytes = 256 bits
         secureRandom.nextBytes(challengeBytes);
         String challengeBase64 = Base64.getEncoder().encodeToString(challengeBytes);
@@ -61,7 +63,7 @@ public class TransactionService {
     }
 
     /**
-     * Verifies the transaction challenge using ECDSA signature verification.
+     * Verifies the transaction using the hardware-anchored ECDSAValidator.
      */
     public boolean verifyTransaction(String id, String signatureBase64, String publicKeyBase64) {
         Transaction tx = database.get(id);
@@ -73,24 +75,20 @@ public class TransactionService {
         }
 
         try {
-            // 1. Decode Public Key from X.509 Base64
-            byte[] keyBytes = Base64.getDecoder().decode(publicKeyBase64);
-            X509EncodedKeySpec spec = new X509EncodedKeySpec(keyBytes);
-            KeyFactory kf = KeyFactory.getInstance("EC"); // Elliptic Curve key factory
-            PublicKey pubKey = kf.generatePublic(spec);
+            // 1. Decode X.509 Public Key via ECDSAValidator
+            PublicKey pubKey = ecdsaValidator.decodePublicKey(publicKeyBase64);
 
-            // 2. Initialize ECDSA Signature engine with SHA-256
-            Signature sig = Signature.getInstance("SHA256withECDSA");
-            sig.initVerify(pubKey);
+            // 2. Build Canonical Payload (Locks ID + Amount + Challenge together!)
+            byte[] canonicalPayload = ecdsaValidator.buildCanonicalPayload(
+                    tx.getId(),
+                    tx.getAmount(),
+                    tx.getChallenge(),
+                    System.currentTimeMillis());
 
-            // 3. Feed the original challenge string as the verification payload
-            sig.update(tx.getChallenge().getBytes(StandardCharsets.UTF_8));
+            // 3. Cryptographically verify signature over secp256r1 curve
+            boolean isValid = ecdsaValidator.verifySignature(canonicalPayload, signatureBase64, pubKey);
 
-            // 4. Verify the signature
-            byte[] sigBytes = Base64.getDecoder().decode(signatureBase64);
-            boolean isValid = sig.verify(sigBytes);
-
-            // 5. Update transaction state
+            // 4. Update transaction state
             if (isValid) {
                 tx.setStatus("VERIFIED");
                 tx.setSignature(signatureBase64);
@@ -98,12 +96,10 @@ public class TransactionService {
                 tx.setStatus("FAILED");
             }
 
-            // Save updated state back to database
             database.put(id, tx);
             return isValid;
 
         } catch (Exception e) {
-            // If any crypto decoding or parsing fails, reject the transaction
             tx.setStatus("FAILED");
             database.put(id, tx);
             return false;
