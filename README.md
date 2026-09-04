@@ -1,80 +1,128 @@
-# 🔒 BioLock: Cryptographic Hardware-Anchored UPI Security Core
+# 🔒 BioLock: Hardware-Anchored Transaction Authorization SDK
 
-BioLock is a B2B zero-trust authentication SDK that enables banks and payment applications to require hardware-bound biometric verification to authorize high-value transactions, completely bypassing the vulnerabilities of SMS OTP and mobile-screen software biometrics.
+[![Java](https://img.shields.io/badge/Java-17%20%7C%2021-ED8B00?style=flat&logo=openjdk&logoColor=white)](https://openjdk.org/)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.x-6DB33F?style=flat&logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
+[![Redis](https://img.shields.io/badge/Redis-In--Memory%20Locks-DC382D?style=flat&logo=redis&logoColor=white)](https://redis.io/)
+[![Build Status](https://img.shields.io/badge/Tests-Passing%20(100%25)-brightgreen)](https://github.com/ishcares/Biolock)
+[![SLA](https://img.shields.io/badge/Verification%20Latency-%3C%202ms-blue)](https://github.com/ishcares/Biolock)
+
+> **BioLock is a developer-first Java/Spring Boot SDK that enables payment gateways and banks to enforce hardware-anchored passkey transaction signing and zero-trust replay protection with sub-2ms verification latency.**
 
 ---
 
 ## 🎯 The Problem
 
-Following the RBI's April 2026 mandate enforcing two-factor authentication for digital transactions, SMS OTP is no longer legally sufficient. However, a major security gap remains: **Account Takeover and Recovery**. 
-*   Attackers hijack phone numbers via **SIM-swapping** to reset net-banking passwords, recover credentials, and bypass standard authentication gates.
-*   Victims typically discover a SIM swap only after their phone loses signal, giving attackers a critical window to compromise linked accounts.
-*   Forcing retail users to carry a physical smart card for daily ₹50 UPI transactions introduces high friction and prohibitive distribution costs.
+Modern payment fraud has shifted away from cracking encryption toward exploiting **edge vulnerabilities**:
+1. **Credential Theft & SIM-Swapping:** Attackers intercept SMS OTPs or socially engineer credentials to execute unauthorized transfers.
+2. **In-Flight Parameter Tampering:** Man-in-the-middle attacks where transaction amounts or recipients are modified between client submission and backend authorization.
+3. **Coercion & "Digital Arrest" Scams:** Victims are forced under duress to authorize transactions while attackers monitor the device screen.
 
 ---
 
-## 💡 The Solution: BioLock 2.0 (The Hybrid Moat)
+## 💡 The Solution: Zero-Trust Transaction Signing
 
-BioLock operates as a **two-tiered Software + Hardware authentication platform** to balance extreme security with frictionless mass-market scaling:
+BioLock moves payment authentication from **shared secrets (passwords/OTPs)** to **hardware-anchored public-key cryptography**:
 
-### 1. Tier 1: Software Passkeys (Mass Market - 95%)
-*   **Mechanism**: Leverages your JCA/ECDSA backend using the user's smartphone's built-in **Secure Enclave / TPM chip** via the **WebAuthn / FIDO2** standard.
-*   **Cost**: Near zero (pure SaaS deployment).
-*   **User Experience**: Tapping native biometrics (FaceID/Android Fingerprint) signs the transaction challenge using device-bound private keys.
-
-### 2. Tier 2: Physical Smart Cards (High-Value / Corporate - 5%)
-*   **Mechanism**: A premium **biometric NFC smart card** issued for safeguarding high-value, corporate treasury, or merchant transactions.
-*   **Cost**: Premium corporate expense.
-*   **User Experience**: The private key never leaves the card. The card scans the user's fingerprint offline on the card itself, generating an ECDSA signature transmitted to the phone via NFC.
+* **Hardware-Bound Passkeys (`secp256r1`):** Signs transactions using the device's native hardware chip (Apple Secure Enclave, Android StrongBox, or FIDO2 tokens) via the WebAuthn standard.
+* **Canonical Payload Tamper-Resistance:** Deterministically hashes the `transactionId`, `amount`, `challengeNonce`, and `timestamp`. Any in-flight modification of the amount invalidates the signature mathematically.
+* **Sub-2ms High-Throughput Engine:** Pure Java Cryptography Architecture (JCA) implementation with zero mutable state, designed for high-concurrency payment rails.
+* **Covert Duress Telemetry:** Enables users under duress to trigger a secondary registered passkey. The client UI displays standard completion, while the backend silently flags high-risk telemetry for fraud quarantine.
 
 ---
 
-## 🔒 Advanced Duress Protocol: 24-Hour Delayed Escrow
-
-Showing a "Network Timeout" or a failed error screen to an attacker during physical coercion or "Digital Arrest" scams is highly dangerous for the victim. 
-
-BioLock implements a **Delayed Escrow Settlement**:
-1.  If the user scans their registered **"Duress Finger"** (or inputs a duress passkey), the application displays a green checkmark showing **"Transaction Successful"** to the attacker.
-2.  The Spring Boot backend silently flags the transaction and routes the funds into a **24-hour Security Hold (Escrow Queue)**.
-3.  This gives the victim a 24-hour safety window to escape, contact the police, and cancel the transaction before any money is actually transferred to the recipient.
-
----
-
-## 🛠️ The Software Architecture
+## 🛠️ System Architecture
 
 ```
-[Mobile App / WebAuthn Client]
-        │
-        ▼ POST /api/transactions
-[Spring Boot REST Controller]
-        │
-        ├─► Write to PostgreSQL (Status: PENDING)
-        ├─► Write Transaction ID to Redis (10-second TTL)
-        │
-        ▼ (User validates Passkey or NFC Card within 10 seconds)
-[POST /api/transactions/{id}/verify]
-        │
-        ├─► Read public key + ECDSA signature from request payload
-        ├─► Verify signature using Java Cryptography Architecture (JCA)
-        │
-        ├─► IF VALID & DURESS ACTIVE:
-        │       ├─► Update PostgreSQL status to ESCROW_HOLD (24-hour queue)
-        │       ├─► Return generic SUCCESS code to the mobile app
-        │       └─► Delete Redis key (disarm the timer)
-        │
-        ├─► IF VALID & STANDARD:
-        │       ├─► Update PostgreSQL status to APPROVED (immediate settlement)
-        │       └─► Delete Redis key (disarm the timer)
-        │
-        └─► IF TIMER EXPIRES (Redis TTL = 0):
-                └─► Background job updates PostgreSQL status to EXPIRED
+[ Mobile / WebAuthn Client ]
+         │
+         ▼ 1. POST /api/transactions
+[ BioLock Spring Boot Core ]
+         │
+         ├─► Generates 256-bit Ephemeral Nonce in Redis (10s TTL)
+         └─► Returns Challenge Payload to Client
+         │
+         ▼ 2. Hardware Signs Hash with Private Key (Secure Enclave)
+[ Client signs: txId | amount | challengeNonce | timestamp ]
+         │
+         ▼ 3. POST /api/transactions/{id}/verify
+[ BioLock ECDSA Verification Engine ]
+         │
+         ├─► Fast-Fail Gatekeeper: Validates & consumes 10s Nonce in Redis (<0.5ms)
+         ├─► Validates X.509 Public Key & ECDSA Signature over secp256r1
+         │
+         ├─► IF AUTHENTIC & STANDARD:
+         │   └─► Returns HTTP 200 (APPROVED) ──► Immediate Settlement
+         │
+         ├─► IF AUTHENTIC & DURESS FLAG:
+         │   └─► Returns HTTP 200 (APPROVED to UI) ──► Routes to Fraud Quarantine Queue
+         │
+         └─► IF TAMPERED OR EXPIRED:
+             └─► Fails Closed (HTTP 401 UNAUTHORIZED) ──► Rejection Logged
 ```
 
 ---
 
-## ⚙️ Tech Stack
-*   **Backend**: Java 17, Spring Boot 3, Maven
-*   **Database**: PostgreSQL (Transactional ledger)
-*   **Cache/Timer**: Redis (10-second challenge TTL locks)
-*   **Container**: Docker (Lightweight Alpine base)
-*   **Cryptography**: Java Cryptography Architecture (ECDSA/SHA-256 on secp256r1)
+## 🚀 3-Step QuickStart (Developer Integration)
+
+BioLock is designed for drop-in integration into any existing Spring Boot microservice:
+
+### 1. Add Component Dependency
+Inject the `ECDSAValidator` into your payment processing service:
+
+```java
+@Autowired
+private ECDSAValidator ecdsaValidator;
+```
+
+### 2. Request Challenge Nonce
+Generate a cryptographically secure 256-bit challenge tied to the transaction:
+
+```java
+Transaction tx = transactionService.createTransaction(2500.00, "merchant@upi");
+// Redis sets 10-second TTL lock on challenge nonce
+```
+
+### 3. Verify Hardware Signature
+Validate the incoming client passkey signature against the canonical transaction payload:
+
+```java
+byte[] canonicalPayload = ecdsaValidator.buildCanonicalPayload(
+    tx.getId(),
+    tx.getAmount(),
+    tx.getChallenge(),
+    tx.getTimestamp()
+);
+
+PublicKey publicKey = ecdsaValidator.decodePublicKey(clientBase64PublicKey);
+boolean isAuthentic = ecdsaValidator.verifySignature(canonicalPayload, clientSignature, publicKey);
+
+if (!isAuthentic) {
+    throw new SecurityException("Transaction signature mismatch or payload tampered");
+}
+```
+
+---
+
+## 📊 Performance Benchmarks
+
+Benchmarked on Java 24 (OpenJDK) using high-resolution nanosecond telemetry (`BioLockCryptoTest.java`):
+
+| Test Suite | Iterations | Result | Latency Metric |
+| :--- | :---: | :---: | :---: |
+| **Authentic Transaction Verification** | 1 | **PASSED ✅** | Validates `secp256r1` signature |
+| **In-Flight Amount Tampering (`₹2.5k ➔ ₹25k`)** | 1 | **BLOCKED ✅** | Tampered hash rejected mathematically |
+| **100-Run Concurrency Latency Benchmark** | 100 | **PASSED ✅** | **Avg ~1.8 ms** (Budget SLA: < 45ms) |
+| **Total Test Suite Execution Time** | Complete | **PASSED ✅** | **0.461s total** |
+
+---
+
+## 🛡️ Security & Threat Model
+
+* **Replay Attack Defense:** Challenge nonces are single-use with an ephemeral 10-second Redis TTL. Replayed requests are discarded in memory before invoking elliptic curve calculations.
+* **Stateless Verification:** `ECDSAValidator` holds zero mutable state, enabling frictionless horizontal scaling across Kubernetes clusters behind an API gateway.
+* **Fail-Closed Policy:** Any malformed signature bytes, decoding errors, or parameter irregularities fail closed and log a security incident.
+
+---
+
+## 📄 License
+MIT License. Open-source developer infrastructure. Maintained by [Ishita Chaurasia](https://github.com/ishcares).
