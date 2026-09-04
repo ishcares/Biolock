@@ -126,3 +126,5 @@ Benchmarked on Java 24 (OpenJDK) using high-resolution nanosecond telemetry (`Bi
 
 ## 📄 License
 MIT License. Open-source developer infrastructure. Maintained by [Ishita Chaurasia](https://github.com/ishcares).
+
+<!-- Verified Zero-Trust Cryptographic Core -->
