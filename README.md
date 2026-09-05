@@ -1,5 +1,10 @@
 # 🔒 BioLock: Hardware-Anchored Transaction Authorization SDK
 
+> 🚀 **Live Production API Demo:** [https://biolock-28kv.onrender.com/api/demo/run](https://biolock-28kv.onrender.com/api/demo/run)
+>
+> **Base Service Status:** [https://biolock-28kv.onrender.com](https://biolock-28kv.onrender.com)
+
+
 [![Java](https://img.shields.io/badge/Java-17%20%7C%2021-ED8B00?style=flat&logo=openjdk&logoColor=white)](https://openjdk.org/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.x-6DB33F?style=flat&logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 [![Redis](https://img.shields.io/badge/Redis-In--Memory%20Locks-DC382D?style=flat&logo=redis&logoColor=white)](https://redis.io/)
