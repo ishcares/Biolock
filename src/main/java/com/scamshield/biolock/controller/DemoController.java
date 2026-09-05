@@ -3,7 +3,6 @@ package com.scamshield.biolock.controller;
 import com.scamshield.biolock.security.ECDSAValidator;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-
 import java.security.KeyPair;
 import java.security.PrivateKey;
 import java.security.PublicKey;
@@ -14,35 +13,43 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
+ * 
  * BioLock 1-Click Developer Demo Controller
- * Demonstrates hardware-anchored transaction binding and in-flight tamper rejection in sub-2ms.
+ * 
+ * Demonstrates hardware-anchored transaction binding and in-flight tamper
+ * 
+ * rejection in sub-2ms.
+ * 
  */
+
 @RestController
 @RequestMapping("/api/demo")
 @CrossOrigin(origins = "*")
+
 public class DemoController {
-
     private final ECDSAValidator validator;
-
     public DemoController(ECDSAValidator validator) {
         this.validator = validator;
     }
 
     /**
+     * 
      * GET /api/demo/run
+     * 
      * Executes a live verification & tampering comparison.
+     * 
      */
+
     @GetMapping("/run")
     public ResponseEntity<Map<String, Object>> runLiveDemo() {
         Map<String, Object> response = new LinkedHashMap<>();
-
         try {
+
             // 1. Simulate client hardware keypair (NIST P-256)
             KeyPair deviceKeys = validator.generateDeviceKeyPair();
             PublicKey publicKey = deviceKeys.getPublic();
             PrivateKey privateKey = deviceKeys.getPrivate();
             String base64PublicKey = Base64.getEncoder().encodeToString(publicKey.getEncoded());
-
             String txId = "TX-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
             Double authorizedAmount = 2500.00;
             String payeeUpi = "merchant.swiggy@icici";
@@ -50,19 +57,22 @@ public class DemoController {
             Long timestamp = System.currentTimeMillis();
 
             // 2. Hardware Enclave signs canonical payload: txId|amount|challenge|timestamp
-            byte[] canonicalPayload = validator.buildCanonicalPayload(txId, authorizedAmount, challengeNonce, timestamp);
+            byte[] canonicalPayload = validator.buildCanonicalPayload(txId, authorizedAmount, payeeUpi, challengeNonce,
+                    timestamp);
             Signature signer = Signature.getInstance("SHA256withECDSA");
             signer.initSign(privateKey);
             signer.update(canonicalPayload);
             String authenticSignature = Base64.getEncoder().encodeToString(signer.sign());
 
-            // 3. Scenario A: Authentic Transaction Verification
+            // 3. Scenario A: Authentic Transac
+            String tamperedPayeeUpi = "hacker.scam@okaxis";
+            byte[] tamperedUpi = validator.buildCanonicalPayload(txId, authorizedAmount, tamperedPayeeUpi,
+                    challengeNonce, timestamp);
             long startAuth = System.nanoTime();
             PublicKey decodedKey = validator.decodePublicKey(base64PublicKey);
             boolean isAuthenticValid = validator.verifySignature(canonicalPayload, authenticSignature, decodedKey);
             long endAuth = System.nanoTime();
             double authLatencyMs = (endAuth - startAuth) / 1_000_000.0;
-
             Map<String, Object> scenarioA = new LinkedHashMap<>();
             scenarioA.put("description", "Authentic Transaction Signed by Device Secure Enclave");
             scenarioA.put("transactionId", txId);
@@ -75,13 +85,13 @@ public class DemoController {
 
             // 4. Scenario B: In-Flight MITM Attack (Amount Tampered to 25,000)
             Double tamperedAmount = 25000.00;
-            byte[] tamperedPayload = validator.buildCanonicalPayload(txId, tamperedAmount, challengeNonce, timestamp);
-
+            byte[] tamperedPayload = validator.buildCanonicalPayload(txId,
+                    tamperedAmount, payeeUpi, challengeNonce, timestamp);
             long startTamper = System.nanoTime();
-            boolean isTamperValid = validator.verifySignature(tamperedPayload, authenticSignature, decodedKey);
+            boolean isTamperValid = validator.verifySignature(tamperedPayload,
+                    authenticSignature, decodedKey);
             long endTamper = System.nanoTime();
             double tamperLatencyMs = (endTamper - startTamper) / 1_000_000.0;
-
             Map<String, Object> scenarioB = new LinkedHashMap<>();
             scenarioB.put("description", "In-Flight Man-in-the-Middle (MITM) Parameter Tampering");
             scenarioB.put("originalAmount", "INR " + String.format("%.2f", authorizedAmount));
@@ -90,15 +100,28 @@ public class DemoController {
             scenarioB.put("status", isTamperValid ? "VULNERABLE" : "BLOCKED_TAMPER_DETECTED");
             scenarioB.put("verdict", "Signature mathematically failed over tampered payload. Transaction dropped.");
 
+            // 5. Scenario C: In-Flight Payee Hijack (Redirected to Hacker UPI)
+            long startPayee = System.nanoTime();
+            boolean isPayeeTamperValid = validator.verifySignature(tamperedUpi, authenticSignature, decodedKey);
+            long endPayee = System.nanoTime();
+            double payeeLatencyMs = (endPayee - startPayee) / 1_000_000.0;
+            Map<String, Object> scenarioC = new LinkedHashMap<>();
+            scenarioC.put("description", "In-Flight Payee UPI Redirection Attack");
+            scenarioC.put("authorizedPayee", payeeUpi);
+            scenarioC.put("interceptedPayee", tamperedPayeeUpi);
+            scenarioC.put("verificationLatencyMs", Double.parseDouble(String.format("%.3f", payeeLatencyMs)));
+            scenarioC.put("status", isPayeeTamperValid ? "VULNERABLE" : "BLOCKED_PAYEE_TAMPER_DETECTED");
+            scenarioC.put("verdict",
+                    "Signature rejected: Payee was altered from legitimate merchant to unauthorized account.");
+            response.put("scenario_payee_tampering_attack", scenarioC);
+
             // 5. Response Summary
             response.put("engine", "BioLock Zero-Trust Transaction Binding SDK");
             response.put("curve", "secp256r1 (NIST P-256 ECDSA)");
             response.put("benchmark", "Sub-5ms Fail-Closed Verification Engine");
             response.put("scenario_authentic_transfer", scenarioA);
             response.put("scenario_in_flight_tampering_attack", scenarioB);
-
             return ResponseEntity.ok(response);
-
         } catch (Exception e) {
             Map<String, Object> error = new LinkedHashMap<>();
             error.put("error", "Demo execution failed: " + e.getMessage());

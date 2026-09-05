@@ -41,11 +41,18 @@ public class ECDSAValidator {
      *
      * Format: transactionId|amount|challengeNonce|timestamp
      */
-    public byte[] buildCanonicalPayload(String transactionId, Double amount, String challengeNonce, Long timestamp) {
-        if (transactionId == null || amount == null || challengeNonce == null || timestamp == null) {
+    public byte[] buildCanonicalPayload(String txId, Double amount, String nonce, Long timestamp) {
+        return buildCanonicalPayload(txId, amount, "default_payee", nonce, timestamp);
+    }
+
+    public byte[] buildCanonicalPayload(String transactionId, Double amount, String payeeUpi, String challengeNonce,
+            Long timestamp) {
+        if (transactionId == null || amount == null || payeeUpi == null || challengeNonce == null
+                || timestamp == null) {
             throw new IllegalArgumentException("Payload attributes must not be null");
         }
-        String canonical = String.format("%s|%.2f|%s|%d", transactionId, amount, challengeNonce, timestamp);
+        String canonical = String.format("%s|%.2f|%s|%s|%d", transactionId, amount, payeeUpi, challengeNonce,
+                timestamp);
         return canonical.getBytes(StandardCharsets.UTF_8);
     }
 
