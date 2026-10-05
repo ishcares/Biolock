@@ -42,6 +42,7 @@ public class TransactionService {
         tx.setAmount(amount);
         tx.setRecipientUpi(recipientUpi);
         tx.setStatus("PENDING");
+        tx.setTimestamp(System.currentTimeMillis());
 
         // 3. Generate 256-bit Cryptographic Challenge Nonce
         byte[] challengeBytes = new byte[32]; // 32 bytes = 256 bits
@@ -78,12 +79,13 @@ public class TransactionService {
             // 1. Decode X.509 Public Key via ECDSAValidator
             PublicKey pubKey = ecdsaValidator.decodePublicKey(publicKeyBase64);
 
-            // 2. Build Canonical Payload (Locks ID + Amount + Challenge together)
+            // 2. Build Canonical Payload binding exact txId + amount + recipientUpi + challenge + timestamp
             byte[] canonicalPayload = ecdsaValidator.buildCanonicalPayload(
                     tx.getId(),
                     tx.getAmount(),
+                    tx.getRecipientUpi(),
                     tx.getChallenge(),
-                    System.currentTimeMillis());
+                    tx.getTimestamp());
 
             // 3. Cryptographically verify signature over secp256r1 curve
             boolean isValid = ecdsaValidator.verifySignature(canonicalPayload, signatureBase64, pubKey);
