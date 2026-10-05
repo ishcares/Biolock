@@ -8,11 +8,10 @@ import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
 
 /**
- * 🔒 BioLock Core Cryptographic Engine
+ * BioLock Core Cryptographic Engine
  * 
- * Production-grade hardware-anchored transaction validator.
- * Enforces ECDSA signature verification over the secp256r1 (NIST P-256) curve.
- * Designed for sub-45ms p99 verification latency in enterprise payment rails.
+ * Transaction authorization validator using the Java Cryptography Architecture (JCA).
+ * Evaluates ECDSA signatures over the secp256r1 (NIST P-256) curve against canonical payloads.
  */
 @Component
 public class ECDSAValidator {
@@ -39,7 +38,7 @@ public class ECDSAValidator {
      * Constructs a deterministic, canonical byte representation of the transaction.
      * Prevents parameter-tampering and man-in-the-middle payload alterations.
      *
-     * Format: transactionId|amount|challengeNonce|timestamp
+     * Format: transactionId|amount|payee|challengeNonce|timestamp
      */
     public byte[] buildCanonicalPayload(String txId, Double amount, String nonce, Long timestamp) {
         return buildCanonicalPayload(txId, amount, "default_payee", nonce, timestamp);
@@ -80,8 +79,8 @@ public class ECDSAValidator {
     }
 
     /**
-     * Testing / Mock utility to generate a compliant client-side keypair.
-     * Simulates Apple Secure Enclave or Android StrongBox key generation.
+     * Testing utility to generate a compliant client-side keypair.
+     * Simulates client-side EC key generation over secp256r1.
      */
     public KeyPair generateDeviceKeyPair() throws NoSuchAlgorithmException, InvalidAlgorithmParameterException {
         KeyPairGenerator keyGen = KeyPairGenerator.getInstance(KEY_ALGORITHM);

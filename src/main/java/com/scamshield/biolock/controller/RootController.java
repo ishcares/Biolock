@@ -12,7 +12,7 @@ public class RootController {
     @GetMapping("/")
     public ResponseEntity<Map<String, String>> root() {
         Map<String, String> map = new LinkedHashMap<>();
-        map.put("service", "BioLock Zero-Trust Eng ine");
+        map.put("service", "BioLock Transaction Authorization Backend");
         map.put("status", "ONLINE");
         map.put("demoUrl", "/api/demo/run");
         map.put("githubRepository", "https://github.com/ishcares/Biolock");

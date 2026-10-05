@@ -23,8 +23,7 @@ public class BioLockCryptoTest {
     @BeforeEach
     void setUp() throws Exception {
         validator = new ECDSAValidator();
-        // Simulate an Apple Secure Enclave or Android StrongBox generating an EC
-        // secp256r1 keypair
+        // Generate client-side EC secp256r1 keypair for testing
         deviceKeys = validator.generateDeviceKeyPair();
         publicKey = deviceKeys.getPublic();
         privateKey = deviceKeys.getPrivate();
@@ -39,7 +38,7 @@ public class BioLockCryptoTest {
     }
 
     @Test
-    @DisplayName("✅ Test 1: Authentic transaction signature verifies successfully")
+    @DisplayName("Test 1: Authentic transaction signature verifies successfully")
     void testAuthenticTransactionVerification() throws Exception {
         String txId = "TX-884920";
         Double amount = 2500.00;
@@ -49,29 +48,29 @@ public class BioLockCryptoTest {
         // 1. Build canonical payload
         byte[] canonicalPayload = validator.buildCanonicalPayload(txId, amount, challengeNonce, timestamp);
 
-        // 2. Hardware signs payload
+        // 2. Client signs payload
         String signature = signData(canonicalPayload, privateKey);
 
         // 3. Verify on server
         PublicKey decodedKey = validator.decodePublicKey(base64PublicKey);
         boolean isAuthentic = validator.verifySignature(canonicalPayload, signature, decodedKey);
 
-        assertTrue(isAuthentic, "Authentic hardware signature should verify to TRUE");
+        assertTrue(isAuthentic, "Authentic client signature should verify to TRUE");
     }
 
     @Test
-    @DisplayName("🛡️ Test 2: Man-In-The-Middle Amount Tampering is Blocked")
+    @DisplayName("Test 2: Man-In-The-Middle Amount Tampering is Blocked")
     void testTamperedAmountRejection() throws Exception {
         String txId = "TX-884920";
         Double authorizedAmount = 2500.00;
         String challengeNonce = "NONCE_7f9b204c81ae";
         Long timestamp = System.currentTimeMillis();
 
-        // User authorized ₹2,500.00
+        // User authorized 2500.00
         byte[] originalPayload = validator.buildCanonicalPayload(txId, authorizedAmount, challengeNonce, timestamp);
         String signature = signData(originalPayload, privateKey);
 
-        // Attacker intercepts and modifies amount to ₹25,000.00
+        // Attacker intercepts and modifies amount to 25000.00
         Double tamperedAmount = 25000.00;
         byte[] tamperedPayload = validator.buildCanonicalPayload(txId, tamperedAmount, challengeNonce, timestamp);
 
@@ -82,8 +81,8 @@ public class BioLockCryptoTest {
     }
 
     @Test
-    @DisplayName("⏱️ Test 3: Sub-45ms Verification Latency Benchmark")
-    void testVerificationLatencyBenchmark() throws Exception {
+    @DisplayName("Test 3: 100-Iteration Sequential Verification Micro-Timing")
+    void testSequentialVerificationMicroTiming() throws Exception {
         String txId = "TX-BENCHMARK-01";
         Double amount = 100.00;
         String challengeNonce = "NONCE_BENCH_TEST";
@@ -93,7 +92,7 @@ public class BioLockCryptoTest {
         String signature = signData(payload, privateKey);
         PublicKey decodedKey = validator.decodePublicKey(base64PublicKey);
 
-        // Measure verification latency over 100 iterations
+        // Measure verification latency over 100 sequential iterations
         long totalNanos = 0;
         int iterations = 100;
 
@@ -107,9 +106,9 @@ public class BioLockCryptoTest {
 
         double avgMillis = (totalNanos / (double) iterations) / 1_000_000.0;
         System.out.println("==================================================");
-        System.out.println("🚀 BioLock Average Verification Latency: " + String.format("%.3f", avgMillis) + " ms");
+        System.out.println("BioLock Average Verification Latency: " + String.format("%.3f", avgMillis) + " ms");
         System.out.println("==================================================");
 
-        assertTrue(avgMillis < 45.0, "Verification latency must be well under 45ms");
+        assertTrue(avgMillis < 45.0, "Verification latency must remain well under baseline budget");
     }
 }

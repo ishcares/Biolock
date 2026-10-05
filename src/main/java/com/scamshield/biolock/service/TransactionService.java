@@ -11,7 +11,7 @@ import java.util.Base64;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-@Service // Tells Spring Boot to manage this class as a Service bean
+@Service
 public class TransactionService {
 
     // Thread-safe in-memory database mock
@@ -63,7 +63,7 @@ public class TransactionService {
     }
 
     /**
-     * Verifies the transaction using the hardware-anchored ECDSAValidator.
+     * Verifies the transaction using ECDSAValidator.
      */
     public boolean verifyTransaction(String id, String signatureBase64, String publicKeyBase64) {
         Transaction tx = database.get(id);
@@ -78,7 +78,7 @@ public class TransactionService {
             // 1. Decode X.509 Public Key via ECDSAValidator
             PublicKey pubKey = ecdsaValidator.decodePublicKey(publicKeyBase64);
 
-            // 2. Build Canonical Payload (Locks ID + Amount + Challenge together!)
+            // 2. Build Canonical Payload (Locks ID + Amount + Challenge together)
             byte[] canonicalPayload = ecdsaValidator.buildCanonicalPayload(
                     tx.getId(),
                     tx.getAmount(),
